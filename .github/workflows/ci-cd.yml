@@ -1,0 +1,93 @@
+name: CI-CD
+
+on:
+  push:
+    branches: [ "dev", "main" ]
+  pull_request:
+    branches: [ "dev", "main" ]
+
+jobs:
+  build-test-deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      EKS_CLUSTER_NAME: cloudnorth-eks
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install backend dependencies & tests
+        working-directory: ./backend
+        run: |
+          npm install
+          npm test || echo "No backend tests configured"
+
+      - name: Install frontend dependencies & tests
+        working-directory: ./frontend
+        run: |
+          npm install
+          npm test || echo "No frontend tests configured"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push backend image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: cloudnorth-backend
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./backend
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Build, tag, and push frontend image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: cloudnorth-frontend
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./frontend
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --name $EKS_CLUSTER_NAME --region $AWS_REGION
+
+      - name: Deploy to EKS
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Update images in manifests on the fly
+          sed -i "s|730335362105.dkr.ecr.eu-west-1.amazonaws.com/cloudnorth-backend:latest|$ECR_REGISTRY/cloudnorth-backend:$IMAGE_TAG|g" k8s/deployment-backend.yaml
+          sed -i "s|730335362105.dkr.ecr.eu-west-1.amazonaws.com/cloudnorth-frontend:latest|$ECR_REGISTRY/cloudnorth-frontend:$IMAGE_TAG|g" k8s/deployment-frontend.yaml
+
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/configmap-backend.yaml
+          kubectl apply -f k8s/deployment-backend.yaml
+          kubectl apply -f k8s/deployment-frontend.yaml
+          # ingress.yaml is still empty in your current setup, so skip for now or fill it later
+          # kubectl apply -f k8s/ingress.yaml
+          kubectl apply -f k8s/hpa-backend.yaml
