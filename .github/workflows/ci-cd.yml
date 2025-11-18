@@ -11,8 +11,8 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      AWS_REGION: ${{ secrets.AWS_REGION }}
-      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_REGION: eu-west-1
+      AWS_ACCOUNT_ID: 730335362105
       EKS_CLUSTER_NAME: cloudnorth-eks
 
     steps:
@@ -41,7 +41,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: eu-west-1
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -80,7 +80,6 @@ jobs:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          # Update images in manifests on the fly
           sed -i "s|730335362105.dkr.ecr.eu-west-1.amazonaws.com/cloudnorth-backend:latest|$ECR_REGISTRY/cloudnorth-backend:$IMAGE_TAG|g" k8s/deployment-backend.yaml
           sed -i "s|730335362105.dkr.ecr.eu-west-1.amazonaws.com/cloudnorth-frontend:latest|$ECR_REGISTRY/cloudnorth-frontend:$IMAGE_TAG|g" k8s/deployment-frontend.yaml
 
